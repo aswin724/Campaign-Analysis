@@ -1,0 +1,383 @@
+---
+title: "Recommendations for Campaign Managers"
+author: "Aswin.P"
+date: "24 November 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r data prep, include=FALSE}
+library(dplyr)
+library(tidyverse)
+library(pander)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+library(treemapify)
+library(treemap)
+library(rmarkdown)
+library(ggcorrplot)
+library(gridExtra)
+library(grid)
+library(reshape2)
+library(rpart)
+library(caret)
+
+## setting the WD
+setwd("C:\\Users\\PONNAS-CONT\\Desktop\\Assignment")
+
+# loading the data
+data_complete <- as.data.frame(read.csv('Data.csv'))
+names(data_complete)
+summary(data_complete) ## no NA
+
+# finding the duplicate entries in the data for the 7 dimensions
+nrow(data_complete) - 
+nrow(data_complete %>% 
+          distinct(Campaign.Type,Audience.Strategy,Device_Type,Domains.Sites,
+           Creative_Concept, Creative_Size, City, .keep_all = TRUE)) 
+
+
+## removing the duplicates(7080 duplictes)
+data_dedup <- data_complete %>% 
+              group_by(Campaign.Type,Audience.Strategy,Device_Type,Domains.Sites,
+                       Creative_Concept, Creative_Size, City) %>%
+              summarise(Impressions=sum(Impressions),
+                        Clicks = sum(Clicks),
+                        Sale.Total.Conversions= sum(Sale.Total.Conversions),
+                        Post_Click_Conversion = sum(Post_Click_Conversion),
+                        Post_View_Conversion= sum(Post_View_Conversion),
+                        Media_Cost_USD=sum(Media_Cost_USD))
+
+
+## New colum creation 
+data_dedup$cost.per.conversion <- ifelse(data_dedup$Sale.Total.Conversions==0, "No conversions",
+                                     data_dedup$Media_Cost_USD/data_dedup$Sale.Total.Conversions)
+
+data_dedup$conversion.flag <- ifelse(data_dedup$Sale.Total.Conversions==0, "No", "Yes")
+
+
+## Remove the non- conversion data points
+data_conv <- data_dedup %>% filter(conversion.flag=='Yes')
+data_noconv <- data_dedup %>% filter(conversion.flag=='No')
+data_conv$cost.per.conversion <- as.numeric(data_conv$cost.per.conversion)
+
+```
+
+## Introduction
+
+This HTML document provides the recommendations and supporting visuals and tables for optimizing the Campaign spend across different dimensions. The codes (including the Data prep) are in the R markdown file. For Information regarding the steps followed for Data preparation, check the Appendix section at the end.
+
+### Recommendation 1:
+
+1. Only **~21%** of the Total Media spend is responsible for the entire sales/conversions. Around **$4625(~79% of the Total spends)** can be repurposed to target the existing Conversion areas, thereby optimising our spends
+
+```{r conversion, echo=FALSE}
+## conversion vs non-conversion
+conversion <-  data_dedup %>% group_by(conversion.flag, Campaign.Type) %>% summarise(Total.conversions=sum(Sale.Total.Conversions), Total.Media.spend.USD=sum(Media_Cost_USD))
+conversion$Media.spend.percentage <- percent(conversion$Total.Media.spend.USD/sum(conversion$Total.Media.spend.USD))
+conversion$Conversion.percentage <- percent(conversion$Total.conversions/sum(conversion$Total.conversions))
+
+
+#3 plot
+ggplot(conversion, 
+       aes(x=conversion.flag,y = Total.Media.spend.USD)) +
+  geom_bar(stat="identity",aes(fill=Campaign.Type))+
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) + ggtitle('Media spends of Different Campaign types for Conversions and Non-conversions') 
+
+
+```
+
+```{r conversion_table, echo=FALSE}
+grid.table(conversion[,c(1,2,3,5)], rows=NULL)
+```
+
+
+### Recommendation 2:
+
+From the above table, we can find that **Type 1 Campaign** is bringing nearly the same amount of sales as **Type 2 Campaign**. But the Total spend of Type 1 is **24 times**(around 96% of entire spend) greater than the spend for Type 2 campaign, as shown by the below pie graph. Repurposing the amount from Non- performing Dimesions of Type 1 to Type 2 can help in optimising the spend while maintaining the sales at low CPC(cost per conversion), since evident from the below bar graph, Type 2 has very low CPC compared to Type 1 conversions.
+*Note- CPC being calculated for each record and summed up*
+
+```{r type_spend, echo=FALSE}
+
+converion_type <-conversion %>%  group_by(Campaign.Type) %>% summarise(Total.spend=sum(Total.Media.spend.USD))
+
+converion_type$percentage <- percent(converion_type$Total.spend/sum(converion_type$Total.spend))
+blank_theme <- theme_minimal()+
+  theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.border = element_blank(),
+  panel.grid=element_blank(),
+  axis.ticks = element_blank(),
+  plot.title=element_text(size=14, face="bold")
+  )  
+  
+bp<- ggplot(converion_type, aes(x="", y=Total.spend, fill=Campaign.Type))+
+geom_bar(width = 1, stat = "identity") + ggtitle("Pie chart for Total spend percentage for Different Campaign types") 
+
+
+
+bp +coord_polar("y", start=0) + blank_theme+
+  theme(axis.text.x=element_blank()) +geom_text(aes(y = Total.spend/2 + c(0, cumsum(Total.spend)[-length(Total.spend)]), 
+            label = percentage), size=5)
+
+
+conversion_cpc <- data_conv %>% filter(conversion.flag=='Yes') %>%
+                  group_by(Campaign.Type) %>% summarise(Total.sales=sum(Sale.Total.Conversions), Total.CPC=sum(cost.per.conversion))
+
+conversion_cpc_melt <- melt(conversion_cpc[,c('Campaign.Type','Total.sales','Total.CPC')],id.vars = 1)
+
+ggplot(conversion_cpc_melt, aes(x=reorder(Campaign.Type,-value), y=value)) + 
+  geom_bar(aes(fill=variable),stat="identity",position='dodge', width=.5) + 
+  labs(title="Total sales and CPC values for each Campaign Type after Conversion") + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))+
+  xlab("Campaign Type")
+                  
+
+```
+
+### Recommendation 3:
+
+For Type 1 campaign, Audiences 1,4,7,9 and for type 2 campaign, Audience 10 can be targeted to obtain nearly **90%** of the sales. Also,  **Concepts E (for Type 1) and A (for Type 2)** are responsible for these sales figures, where Concept A operates at a very Low total CPC of *$56* when compared to Concept E's total CPC of *$1088*
+
+```{r audience_concept, echo=FALSE}
+
+audience_type1 <- data_conv %>% filter(Campaign.Type=="Type 1") %>%
+  group_by(Creative_Concept,Audience.Strategy) %>% 
+  summarise(Total.sales=sum(Sale.Total.Conversions),Total.cost=sum(Media_Cost_USD), Total.CPC=sum(cost.per.conversion)) %>% arrange(desc(Total.sales))
+
+audience_type2 <- data_conv %>% filter(Campaign.Type=="Type 2") %>%
+  group_by(Creative_Concept,Audience.Strategy) %>% 
+  summarise(Total.sales=sum(Sale.Total.Conversions),Total.cost=sum(Media_Cost_USD), Total.CPC=sum(cost.per.conversion)) %>% arrange(desc(Total.sales))
+
+## plots
+
+ggplot(audience_type1, 
+       aes(x=reorder(Audience.Strategy, -Total.sales),y = Total.sales)) +
+  geom_bar(stat="identity",aes(fill=Creative_Concept))+
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  xlab('Audience Strategy') +
+  ggtitle('Audience Type vs Sales for Type 1 conversions')
+
+```
+
+```{r audience_1, echo=FALSE}
+print("Data for Type 1 conversions")
+grid.table(audience_type1[,c(1,2,3,5)], rows=NULL)
+```
+
+```{r audience_2, echo=FALSE}
+print("Data for Type 2 conversions")
+grid.table(audience_type2[,c(1,2,3,5)], rows=NULL)
+```
+
+
+### Recommendation 4:
+
+Among 9 distinct creative sizes, for both Type 1, 2 Campaigns, *increase* the Campaigns for the Sizes **300X250, 728X90, 160X600, 300X600**, since they capture **~ 60%** of the Total sales.
+
+
+
+```{r creative_size_1, echo=FALSE}
+
+creative_size_type1 <- data_conv %>% filter(Campaign.Type=="Type 1") %>%
+  group_by(Creative_Concept, Creative_Size) %>%
+  summarise(Total.sales=sum(Sale.Total.Conversions),
+            Total.cost=sum(Media_Cost_USD),
+            Total.CPC= sum(cost.per.conversion)) %>%
+  arrange(desc(Total.sales))
+
+treemap(creative_size_type1, #Your data frame object
+        index=c('Creative_Concept','Creative_Size'),  #A list of your categorical variables
+        vSize = "Total.sales",  #This is your quantitative variable
+        vColor= "Total.cost", #This is a categorical variable
+        type="value", #Type sets the organization and color scheme of your treemap
+        title = "Treemap for Creative concept and Creative Size for Type 1 Campaign"
+)
+
+
+creative_size_type2 <- data_conv %>% filter(Campaign.Type=="Type 2") %>%
+  group_by(Creative_Concept, Creative_Size) %>%
+  summarise(Total.sales=sum(Sale.Total.Conversions),
+            Total.cost=sum(Media_Cost_USD),
+            Total.CPC= sum(cost.per.conversion)) %>%
+  arrange(desc(Total.sales))
+
+treemap(creative_size_type2, #Your data frame object
+        index=c('Creative_Concept','Creative_Size'),  #A list of your categorical variables
+        vSize = "Total.sales",  #This is your quantitative variable
+        vColor= "Total.cost", #This is a categorical variable
+        type="value", #Type sets the organization and color scheme of your treemap
+        title = "Treemap for Creative concept and Creative Size for Type 2 Campaign"
+)
+
+```
+
+### Recommendation 5:
+
+**99 cities** are present in Type 1 campaign and **70** in Type 2 campaign. Irrespective of the Type of Campaign, it is recommended to concentrate on the  **top 10 Cities(Cities 17,5,28,36,16,3,11,7,34,57)** in both the scenarios as they account for **~70-75%** of the Total sales. Also from the below graph, the top cities sales counts are
+the same, but Total spends in Cities with Type 2 campaign are less than the same cities with type 1 campaign.
+
+
+```{r cities, echo=FALSE}
+cities_type1 <- data_conv %>% filter(Campaign.Type=="Type 1") %>%
+  group_by(City) %>%
+  summarise(Total.sales=sum(Sale.Total.Conversions),Total.cost=sum(Media_Cost_USD), Total.CPC=sum(cost.per.conversion)) %>%
+  arrange(desc(Total.sales))
+
+cities_type1$sales.percent <- percent(cities_type1$Total.sales/sum(cities_type1$Total.sales))
+
+cities_type2 <- data_conv %>% filter(Campaign.Type=="Type 2") %>%
+  group_by(Campaign.Type,City) %>%
+  summarise(Total.sales=sum(Sale.Total.Conversions),Total.cost=sum(Media_Cost_USD), Total.CPC=sum(cost.per.conversion)) %>%
+  arrange(desc(Total.sales))
+
+cities_type2$sales.percent <- percent(cities_type2$Total.sales/sum(cities_type2$Total.sales))
+
+df <- head(cities_type1, n=25)
+cities_type1_melt <- melt(df[,c('City','Total.sales','Total.cost')],id.vars = 1)
+df <- head(cities_type2, n=25)
+cities_type2_melt <- melt(df[,c('City','Total.sales','Total.cost')],id.vars = 1)
+
+
+ggplot(cities_type1_melt, aes(x=reorder(City,-value), y=value)) + 
+  geom_bar(aes(fill=variable),stat="identity",position='dodge', width=.5) + 
+  labs(title="Top 25 City Vs Total.sales for Type 1 campaign") + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))+
+  xlab("City")
+```
+
+```{r cities_1, echo=FALSE}
+ggplot(cities_type2_melt, aes(x=reorder(City,-value), y=value)) + 
+  geom_bar(aes(fill=variable),stat="identity",position='dodge', width=.5) + 
+  labs(title="Top 25 City Vs Total.sales for Type 2 campaign") + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6)) +
+  xlab("City")
+
+```
+
+### Recommendation 6:
+
+Conversions happen on total of **945** sites at a spend of **$1235**, but an additional **$4625(4 times greater than the spend for conversion sites)** is spent on a whopping **13017 ** sites where sales doesn't occur. This is where most of the money is wasted and it is recommended that such sites should not be engaged with in future.
+
+```{r sites, echo=FALSE}
+sites_count <- data_dedup %>% group_by(conversion.flag) %>%
+              summarise(unique.sites.count=length(unique(Domains.Sites)), Sites.spend=sum(Media_Cost_USD))
+
+sites_count_melt <-  melt(sites_count[,c('conversion.flag','unique.sites.count','Sites.spend')],id.vars = 1)
+
+
+ggplot(sites_count_melt, aes(x=reorder(conversion.flag,-value), y=value)) + 
+  geom_bar(aes(fill=variable),stat="identity",position='dodge', width=.5) + 
+  labs(title="Domain site Analysis") + 
+  xlab("Conversion Flag")
+```
+
+Top 20 sites from each campaign type conversion is responsible for around **50%** of the total sales. But the prominent conversion sites for the 2 different campaign types are different. Among the top 20 sites, there are only **5 common sites(Sites 91,335,72,301,474)** between the 2 campaigns, and that too their rankings were different. So it is evident that sites are campaign specific. It is recommended to target these sites. There are also Sites like **91** (in case of Type 1 campaign), that required huge spendings to achieve good conversions. That amount can be routed to sites like **335** that produce results with less spending.
+
+```{r sites_graph, echo=FALSE}
+site_type1 <- data_conv %>% filter(Campaign.Type=='Type 1') %>%
+              group_by(Domains.Sites) %>%
+              summarise(Total.sales= sum(Sale.Total.Conversions), Total.spend=sum(Media_Cost_USD)) %>%
+              arrange(desc(Total.sales))
+
+site_type1_graph <- head(site_type1, n=20)
+
+
+site_type1_graph_melt <-  melt(site_type1_graph[,c('Domains.Sites','Total.sales','Total.spend')],id.vars = 1)
+
+
+ggplot(site_type1_graph_melt, aes(x=reorder(Domains.Sites,-value), y=value)) + 
+  geom_bar(aes(fill=variable),stat="identity",position='dodge', width=.5) + 
+  labs(title="Top 20 Domain site for Type 1 campaign") + 
+  xlab("Domain sites") + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))
+
+
+
+site_type2 <- data_conv %>% filter(Campaign.Type=='Type 2') %>%
+  group_by(Domains.Sites) %>%
+  summarise(Total.sales= sum(Sale.Total.Conversions), Total.spend=sum(Media_Cost_USD)) %>%
+  arrange(desc(Total.sales))
+
+site_type2_graph <- head(site_type2, n=20)
+
+
+site_type2_graph_melt <-  melt(site_type2_graph[,c('Domains.Sites','Total.sales','Total.spend')],id.vars = 1)
+
+
+ggplot(site_type2_graph_melt, aes(x=reorder(Domains.Sites,-value), y=value)) + 
+  geom_bar(aes(fill=variable),stat="identity",position='dodge', width=.5) + 
+  labs(title="Top 20 Domain site for Type 2 campaign") + 
+  xlab("Domain sites") + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))
+```
+
+
+
+
+
+
+
+
+### Recommendation 7:
+
+Combining all of the above recommended high impact areas together, we get a finite combination of Areas to concentrate. These categories account for around **2478 or ~55%** of the total sales, with a Total CPC of **$383** and a total spend of **$845**, which is **~14%** of the whole Media spend.
+
+
+```{r reco, echo=FALSE}
+
+### Recommendations
+reco <- data_conv %>% filter(Audience.Strategy %in% c('Audience 1','Audience 4','Audience 10','Audience 7','Audience 9'),
+                             Creative_Concept %in% c('Concept A','Concept E'),
+                             City %in% c('City 17','City 5','City 28','City 36','City 16','City 3','City 11','City 7','City 34','City 57'),
+                             Creative_Size %in% c('160x600','300x250','300x600','728x90')) %>%
+                      summarise(Recommended.Sales=sum(Sale.Total.Conversions), Recommended.spend=sum(Media_Cost_USD), Recommend.CPC=sum(cost.per.conversion))
+
+print("Sales made by the Recommended Dimensions( in units)")
+print(sum(reco$Recommended.Sales))
+print("Percentage of Recommended sales from the total sales")
+print(percent(sum(reco$Recommended.Sales)/sum(data_conv$Sale.Total.Conversions)))
+print('Total spend of Recommended Dimensions(in $)')
+print(sum(reco$Recommended.spend))
+print("Percentage of Recommended spend from the total spend")
+print(percent(sum(reco$Recommended.spend)/sum(data_complete$Media_Cost_USD)))
+print('Total CPC of Recommended Dimesions(in $)')
+print(sum(reco$Recommend.CPC))
+print('Percentage of Recommended CPC from the Total CPC in the campaigns')
+print(percent(sum(reco$Recommend.CPC)/sum(data_conv$cost.per.conversion)))
+
+```
+
+### Correlogram of Metrics:
+
+As expected from the business, all the continous Metrics are correlated with varying levels of positivity
+
+``` {r correlogram, echo=FALSE}
+corr <- cor(data_conv[,c(8,9,10,13)])
+ggcorrplot(corr, hc.order = TRUE,
+           type = "lower", 
+           lab = TRUE, 
+           lab_size = 3, 
+           method="circle", 
+           colors = c("tomato2", "white", "springgreen3"), 
+           title="Correlogram of Continuous variables", 
+           ggtheme=theme_bw)
+
+```
+
+
+## Appendix
+
+* The Data received is clean without missing values.
+* No.of.rows = 207770
+* No.of.columns = 11
+* No.of.Duplicate Entries across 7 dimesions= 7080
+* My assumption= Duplicate entries exist either because the entry was made twice or the data was subsetted from a time period(say data for month 1 full and 1 or 2 days data of month 2). I went with the second scenario.
+* My solution= Summed up the entries for the given time period.
+* Records after Deduplication = 200690
